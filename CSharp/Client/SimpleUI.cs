@@ -16,97 +16,63 @@ namespace SimpleUI {
         public void Initialize() {
             harmony = new Harmony("SimpleUI");
 
-            harmony.Patch(
-                original: AccessTools.PropertySetter(typeof(CharacterInventory), "CurrentLayout"),
-                prefix: new HarmonyMethod(typeof(SimpleUI).GetMethod("CharacterInventory_CurrentLayout_setter"))
-            );
-
+            // Hide useless crews active reports button
             harmony.Patch(
                 original: AccessTools.Method(typeof(CrewManager), "UpdateReports"),
-                postfix: new HarmonyMethod(typeof(SimpleUI).GetMethod("CrewManager_UpdateReports_after"))
+                postfix: new HarmonyMethod(typeof(SimpleUIMod).GetMethod("CrewManager_UpdateReports_after"))
             );
 
+            // Modifies position of original layout and moves useless elements over screenspace
             harmony.Patch(
                 original: AccessTools.Method(typeof(HUDLayoutSettings), "CreateAreas"),
-                postfix: new HarmonyMethod(typeof(SimpleUI).GetMethod("HUDLayoutSettings_CreateAreas_after"))
+                postfix: new HarmonyMethod(typeof(SimpleUIMod).GetMethod("HUDLayoutSettings_CreateAreas_after"))
             );
 
-            harmony.Patch(
-                original: AccessTools.Method(typeof(ChatBox), "AddMessage"),
-                prefix: new HarmonyMethod(typeof(SimpleUI).GetMethod("ChatBox_AddMessage_replace"))
-            );
-
+            // Draw player health and afflictions over players characted in-game
             harmony.Patch(
                 original: AccessTools.Method(typeof(Character), "DrawFront"),
-                postfix: new HarmonyMethod(typeof(SimpleUI).GetMethod("Character_DrawHUD_after"))
+                postfix: new HarmonyMethod(typeof(SimpleUIMod).GetMethod("Character_DrawHUD_after"))
+            );
+
+            // Move inventory to the left side of screen by game layout based HUD drawing
+            harmony.Patch(
+                original: AccessTools.PropertySetter(typeof(CharacterInventory), "CurrentLayout"),
+                prefix: new HarmonyMethod(typeof(SimpleUIMod).GetMethod("CharacterInventory_CurrentLayout_setter"))
+            );
+
+            // Calculate hands slot positions based on left and right layout
+            harmony.Patch(
+                original: AccessTools.Method(typeof(CharacterInventory), "SetSlotPositions"),
+                postfix: new HarmonyMethod(typeof(SimpleUIMod).GetMethod("CharacterInventory_SetSlotPositions_after"))
+            );
+
+            // Append slot positions
+            harmony.Patch(
+                original: AccessTools.Method(typeof(CharacterInventory), "CreateSlots"),
+                postfix: new HarmonyMethod(typeof(SimpleUIMod).GetMethod("CharacterInventory_CreateSlots_after"))
+            );
+
+            // Fix chat right disposition character health window overlap
+            harmony.Patch(
+                original: AccessTools.Method(typeof(CharacterHealth), "UpdateAlignment"),
+                postfix: new HarmonyMethod(typeof(SimpleUIMod).GetMethod("CharacterHealth_UpdateAlignment_after"))
+            );
+
+            // Replaces original chatbox code to make messages more compact
+            harmony.Patch(
+                original: AccessTools.Method(typeof(ChatBox), "AddMessage"),
+                prefix: new HarmonyMethod(typeof(SimpleUIMod).GetMethod("ChatBox_AddMessage_replace"))
             );
         }
 
-        public static float dangerScale = 0.15f;
-
-        public static void Character_DrawHUD_after(Character __instance, SpriteBatch spriteBatch, Camera cam) {
-            if (Character.controlled == __instance) {
-                Vector2 pos = __instance.DrawPosition;
-
-                // Show players afflictions
-                Vector2 afflictionsBasePos = new Vector2(pos.X, - pos.Y - __instance.hudInfoHeight - 20);
-                CharacterHealth health = __instance.CharacterHealth;
-                List<Affliction> afflictions = health.statusIcons;
-                bool isEven = afflictions.Count % 2 == 0;
-                int i = - (int) Math.Ceiling((decimal) afflictions.Count / 2);
-                int k = 0;
-                bool inDanger = false;
-                foreach (Affliction affliction in afflictions) {
-                    AfflictionPrefab afflictionPrefab = affliction.Prefab;
-                    Sprite icon = afflictionPrefab.Icon;
-                    float scale = 0.2f;
-                    if (affliction.DamagePerSecond > 1.0f) {
-                        scale = dangerScale;
-                        inDanger = true;
-                    }
-                    icon.Draw(
-                        spriteBatch,
-                        afflictionsBasePos + new Vector2(icon.size.X * (i + k + (isEven ? 0 : 0.5f)) * 0.2f, 0),
-                        CharacterHealth.GetAfflictionIconColor(afflictionPrefab, affliction.Strength),
-                        0,
-                        scale
-                    );
-                    k++;
-                }
-                if (inDanger) {
-                    dangerScale += 0.001f;
-                    if (dangerScale > 0.2f) {
-                        dangerScale = 0.15f;
-                    }
-                }
-
-                // Show players health
-                float vitality = health.DisplayedVitality / __instance.MaxVitality;
-                if (vitality < 0.98f && __instance.hudInfoVisible) {
-                    Vector2 healthBarPos = new Vector2(pos.X - 50, pos.Y - __instance.hudInfoHeight - 40);
-                    GUI.DrawProgressBar(
-                        spriteBatch,
-                        healthBarPos,
-                        new Vector2(100.0f, 10.0f),
-                        vitality,
-                        Color.Lerp(GUIStyle.Red, GUIStyle.Green, (float) Math.Pow(vitality, 2f)),
-                        new Color(0.5f, 0.57f, 0.6f, 1.0f)
-                    );
-                }
-            }
-        }
-
-        public static void CharacterInventory_CurrentLayout_setter(ref CharacterInventory.Layout value) {
-            if (value == CharacterInventory.Layout.Default) {
-                value = CharacterInventory.Layout.Left;
-            }
-        }
 
         public static void CrewManager_UpdateReports_after(CrewManager __instance) {
+            // Disable crewmates report buttons
             __instance.ReportButtonFrame.Visible = false;
         }
 
         public static void HUDLayoutSettings_CreateAreas_after() {
+            // Modify position of default GUI game elements
             int chatBoxWidth = (int) (475 * GUI.Scale * GUI.AspectRatioAdjustment);
             int chatBoxHeight = (int) Math.Max(GameMain.GraphicsHeight * 0.25f, 150);
 
@@ -139,20 +105,142 @@ namespace SimpleUI {
             // HUDLayoutSettings.HealthBarAfflictionArea = new Rectangle(HUDLayoutSettings.HealthBarArea.X, HUDLayoutSettings.HealthBarArea.Y - HUDLayoutSettings.Padding - afflictionAreaHeight, HUDLayoutSettings.HealthBarArea.Width, afflictionAreaHeight);
         }
 
-        public void OnLoadCompleted() {
-            HUDLayoutSettings_CreateAreas_after();
+        public static float dangerScale = 0.15f;
+
+        public static void Character_DrawHUD_after(Character __instance, SpriteBatch spriteBatch, Camera cam) {
+            if (Character.controlled == __instance) {
+                Vector2 pos = __instance.DrawPosition;
+
+                // Show players afflictions
+                Vector2 afflictionsBasePos = new Vector2(pos.X, -pos.Y - __instance.hudInfoHeight - 20);
+                CharacterHealth health = __instance.CharacterHealth;
+                List<Affliction> afflictions = health.statusIcons;
+                bool isEven = afflictions.Count % 2 == 0;
+                int i = -(int) Math.Ceiling((decimal) afflictions.Count / 2);
+                int k = 0;
+                bool inDanger = false;
+                foreach (Affliction affliction in afflictions) {
+                    AfflictionPrefab afflictionPrefab = affliction.Prefab;
+                    Sprite icon = afflictionPrefab.Icon;
+                    float scale = 0.2f;
+                    // Simple animation when affliction is dangerous
+                    if (affliction.DamagePerSecond > 1.0f) {
+                        scale = dangerScale;
+                        inDanger = true;
+                    }
+                    icon.Draw(
+                        spriteBatch,
+                        afflictionsBasePos + new Vector2(icon.size.X * (i + k + (isEven ? 0 : 0.5f)) * 0.2f, 0),
+                        CharacterHealth.GetAfflictionIconColor(afflictionPrefab, affliction.Strength),
+                        0,
+                        scale
+                    );
+                    k++;
+                }
+                if (inDanger) {
+                    // Not great cuz based on framerate
+                    dangerScale += 0.001f;
+                    if (dangerScale > 0.2f) {
+                        dangerScale = 0.15f;
+                    }
+                }
+
+                // Show players health
+                float vitality = health.DisplayedVitality / __instance.MaxVitality;
+                if (vitality < 0.98f && __instance.hudInfoVisible) {
+                    Vector2 healthBarPos = new Vector2(pos.X - 50, pos.Y - __instance.hudInfoHeight - 40);
+                    GUI.DrawProgressBar(
+                        spriteBatch,
+                        healthBarPos,
+                        new Vector2(100.0f, 10.0f),
+                        vitality,
+                        Color.Lerp(GUIStyle.Red, GUIStyle.Green, (float) Math.Pow(vitality, 2f)),
+                        new Color(0.5f, 0.57f, 0.6f, 1.0f)
+                    );
+                }
+            }
         }
 
-        public void PreInitPatching() {
+        public static void CharacterInventory_CurrentLayout_setter(ref CharacterInventory.Layout value) {
+            // Move inventory to left of the screen by game layout system
+            if (value == CharacterInventory.Layout.Default) {
+                value = CharacterInventory.Layout.Left;
+            }
         }
 
-        public void Dispose() {
-            if (harmony != null) {
-                harmony.UnpatchSelf();
+        public static void CharacterInventory_SetSlotPositions_after(CharacterInventory __instance, CharacterInventory.Layout layout) {
+            // Fix hands slots on left/right layout when active slots is lower than 7
+            VisualSlot[] visualSlots = __instance.visualSlots;
+            if (visualSlots.None()) { return; }
+            Vector2[] SlotPositions = __instance.SlotPositions;
+            InvSlotType[] SlotTypes = __instance.SlotTypes;
+            int spacing = GUI.IntScale(5);
+            int bottomOffset = CharacterInventory.SlotSize.Y + spacing * 2 + Inventory.ContainedIndicatorHeight;
+            int personalSlotY = GameMain.GraphicsHeight - (bottomOffset + spacing) * 2 - (int) (Inventory.UnequippedIndicator.size.Y * Inventory.UIScale);
+            switch (layout) {
+                case CharacterInventory.Layout.Left: {
+                        int x = HUDLayoutSettings.InventoryAreaLower.X;
+                        float y = GameMain.GraphicsHeight - bottomOffset;
+                        if (!GUI.IsUltrawide && GUI.IsHUDScaled) {
+                            const float margin = 100;
+                            x -= HUDLayoutSettings.ChatBoxArea.Width - (int) margin;
+                        }
+                        int handSlotX = x + visualSlots[0].Rect.Width * 7 + spacing * 10;
+
+                        for (int i = 0; i < SlotPositions.Length; i++) {
+                            if (SlotTypes[i] == InvSlotType.RightHand || SlotTypes[i] == InvSlotType.LeftHand) {
+                                bool rightSlot = SlotTypes[i] == InvSlotType.RightHand;
+                                SlotPositions[i] = new Vector2(rightSlot ? handSlotX : handSlotX - visualSlots[0].Rect.Width - spacing, personalSlotY);
+                                UpdateSlotPosition(__instance, i, SlotPositions[i]);
+                            }
+                        }
+                    }
+                    break;
+                case CharacterInventory.Layout.Right: {
+                        int x = HUDLayoutSettings.InventoryAreaLower.Right;
+                        int handSlotX = x - visualSlots[0].Rect.Width * 8 - spacing * 11;
+                        for (int i = 0; i < SlotPositions.Length; i++) {
+                            if (SlotTypes[i] == InvSlotType.RightHand || SlotTypes[i] == InvSlotType.LeftHand) {
+                                SlotPositions[i] = new Vector2(handSlotX, personalSlotY);
+                                UpdateSlotPosition(__instance, i, SlotPositions[i]);
+                                handSlotX += visualSlots[i].Rect.Width + spacing;
+                            }
+                        }
+                    }
+                    break;
+            }
+        }
+
+        public static void UpdateSlotPosition(CharacterInventory __instance, int index, Vector2 position) {
+            // Since positions are updated only in CreateSlots function, do it manually after SetSlotPositions to overwrite the result
+            float multiplier = Inventory.UIScale * GUI.AspectRatioAdjustment;
+            Sprite slotSprite = CharacterInventory.SlotSpriteSmall;
+            Rectangle slotRect = new Rectangle(
+                (int) position.X,
+                (int) position.Y,
+                (int) (slotSprite.size.X * multiplier), (int) (slotSprite.size.Y * multiplier));
+
+            __instance.visualSlots[index] = new VisualSlot(slotRect);
+        }
+
+        public static void CharacterInventory_CreateSlots_after(CharacterInventory __instance) {
+            // In case when called without SetSlotPositions
+            CharacterInventory_SetSlotPositions_after(__instance, __instance.CurrentLayout);
+        }
+
+        public static void CharacterHealth_UpdateAlignment_after(CharacterHealth __instance) {
+            GUIFrame healthWindow = __instance.healthWindow;
+            Point screenResolution = __instance.screenResolution;
+
+            switch (__instance.alignment) {
+                case Alignment.Right:
+                    healthWindow.RectTransform.AbsoluteOffset = new Point(HUDLayoutSettings.Padding, screenResolution.Y - HUDLayoutSettings.ChatBoxArea.Y + HUDLayoutSettings.Padding * 4);
+                    break;
             }
         }
 
         public static bool ChatBox_AddMessage_replace(ChatBox __instance, ref ChatMessage message) {
+            // Its just redefine of base AddMessage function, because its hard to modify original stack (parenting there is based on RectTransform)
             GUIListBox chatBox = __instance.chatBox;
             if (GameMain.IsSingleplayer) {
                 var should = GameMain.LuaCs.Hook.Call<bool?>("chatMessage", message.Text, message.SenderClient, message.Type, message);
@@ -222,6 +310,8 @@ namespace SimpleUI {
 
             }
 
+            // There we're pushing in front of message space characters to fake player nick name and timestamp text
+            // This is because RichText supports only rectangle form and we don't like to split text by our own
             Vector2 approx = GUIStyle.SmallFont.MeasureChar(' ');
             Vector2 req = GUIStyle.SmallFont.MeasureString(timeStamp + senderName);
             displayedText = new string(' ', (int) Math.Max(0, Math.Ceiling((float) (req.X / approx.X)) - 1)) + displayedText;
@@ -322,6 +412,19 @@ namespace SimpleUI {
 
             SoundPlayer.PlayUISound(soundType);
             return false;
+        }
+
+        public void OnLoadCompleted() {
+            HUDLayoutSettings_CreateAreas_after();
+        }
+
+        public void PreInitPatching() {
+        }
+
+        public void Dispose() {
+            if (harmony != null) {
+                harmony.UnpatchSelf();
+            }
         }
     }
 }
